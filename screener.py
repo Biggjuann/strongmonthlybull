@@ -60,7 +60,7 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int) -> pd.Se
 def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     """
     Compute the CVD Bias indicator on OHLCV data.
-    Matches Pine Script logic exactly (with useVWAP=false for monthly).
+    Matches Pine Script logic exactly, including VWAP.
 
     Parameters
     ----------
@@ -99,9 +99,19 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     # Pine: priceMA = ta.ema(close, priceMaLen)
     price_ma = ema(df["Close"], p["price_ma_len"])
 
+    # Pine: vwapValue = ta.vwap(close)
+    # ta.vwap(source) = cumsum(source * volume) / cumsum(volume)
+    cum_vol = df["Volume"].cumsum()
+    cum_pv = (df["Close"] * df["Volume"]).cumsum()
+    vwap_value = cum_pv / cum_vol.clip(lower=1)
+
     # Pine: priceAboveMA = close > priceMA
     price_above_ma = df["Close"] > price_ma
     price_below_ma = df["Close"] < price_ma
+
+    # Pine: priceAboveVWAP = close > vwapValue
+    price_above_vwap = df["Close"] > vwap_value
+    price_below_vwap = df["Close"] < vwap_value
 
     # Pine: cvdUp = cvd > cvdMA and cvd > cvd[1]
     cvd_up = (cvd > cvd_ma) & (cvd > cvd.shift(1))
@@ -109,16 +119,15 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     cvd_down = (cvd < cvd_ma) & (cvd < cvd.shift(1))
 
     # Pine: bullCore = priceAboveMA and cvdUp and (not useVWAP or priceAboveVWAP)
-    # Monthly: useVWAP=false → (not false or ...) = true → priceAboveMA and cvdUp
-    bull_core = price_above_ma & cvd_up
+    # useVWAP=true → requires priceAboveVWAP
+    bull_core = price_above_ma & cvd_up & price_above_vwap
     # Pine: bearCore = priceBelowMA and cvdDown and (not useVWAP or priceBelowVWAP)
-    bear_core = price_below_ma & cvd_down
+    bear_core = price_below_ma & cvd_down & price_below_vwap
 
     # Pine: bullWeak = (priceAboveMA and cvd > cvdMA) or (useVWAP and priceAboveVWAP and cvdUp)
-    # Monthly: useVWAP=false → second clause = false
-    bull_weak = price_above_ma & (cvd > cvd_ma)
+    bull_weak = (price_above_ma & (cvd > cvd_ma)) | (price_above_vwap & cvd_up)
     # Pine: bearWeak = (priceBelowMA and cvd < cvdMA) or (useVWAP and priceBelowVWAP and cvdDown)
-    bear_weak = price_below_ma & (cvd < cvd_ma)
+    bear_weak = (price_below_ma & (cvd < cvd_ma)) | (price_below_vwap & cvd_down)
 
     # ── Chop filter ─────────────────────────────────────────────────────
     # Pine: atrValue = ta.atr(atrLen)  — uses Wilder's RMA
@@ -153,6 +162,7 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     df["neutral"] = neutral
     df["is_chop"] = is_chop
     df["price_ma"] = price_ma
+    df["vwap"] = vwap_value
     df["cvd"] = cvd
     df["cvd_ma"] = cvd_ma
     df["atr"] = atr_value
@@ -198,6 +208,8 @@ def debug_ticker(ticker: str, params: dict | None = None) -> list[dict]:
                 "bias": str(r.get("bias", "N/A")),
                 "is_chop": bool(r.get("is_chop", False)),
                 "price_ma": round(float(r.get("price_ma", 0)), 2),
+                "vwap": round(float(r.get("vwap", 0)), 2),
+                "price_vs_vwap": "ABOVE" if r["Close"] > r.get("vwap", 0) else "BELOW",
                 "cvd": round(float(r.get("cvd", 0)), 2),
                 "cvd_ma": round(float(r.get("cvd_ma", 0)), 2),
                 "atr": round(float(r.get("atr", 0)), 2),
@@ -309,6 +321,8 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
             "price_ma": round(float(last_row["price_ma"]), 2),
             "cvd_vs_ma": "ABOVE" if last_row["cvd"] > last_row["cvd_ma"] else "BELOW",
             "price_vs_ma": "ABOVE" if last_row["Close"] > last_row["price_ma"] else "BELOW",
+            "vwap": round(float(last_row["vwap"]), 2),
+            "price_vs_vwap": "ABOVE" if last_row["Close"] > last_row["vwap"] else "BELOW",
             "is_chop": bool(last_row["is_chop"]),
             "atr": round(float(last_row["atr"]), 2),
             "price_change_pct": round(
