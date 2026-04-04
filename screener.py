@@ -15,6 +15,8 @@ import logging
 import json
 import os
 
+from tickers import get_combined_universe
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -27,53 +29,6 @@ DEFAULTS = {
     "chop_threshold_pct": 0.35,
     "use_chop_filter": True,
 }
-
-
-# ── Universe helpers ────────────────────────────────────────────────────────
-def get_sp500_tickers() -> list[str]:
-    """Fetch current S&P 500 constituents from Wikipedia."""
-    try:
-        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        tables = pd.read_html(url)
-        df = tables[0]
-        tickers = df["Symbol"].str.replace(".", "-", regex=False).tolist()
-        logger.info(f"Fetched {len(tickers)} S&P 500 tickers")
-        return tickers
-    except Exception as e:
-        logger.error(f"Failed to fetch S&P 500 list: {e}")
-        return []
-
-
-def get_nasdaq100_tickers() -> list[str]:
-    """Fetch current NASDAQ 100 constituents from Wikipedia."""
-    try:
-        url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-        tables = pd.read_html(url)
-        # The table with tickers is typically the 4th table
-        for table in tables:
-            if "Ticker" in table.columns:
-                tickers = table["Ticker"].str.replace(".", "-", regex=False).tolist()
-                logger.info(f"Fetched {len(tickers)} NASDAQ 100 tickers")
-                return tickers
-            elif "Symbol" in table.columns:
-                tickers = table["Symbol"].str.replace(".", "-", regex=False).tolist()
-                logger.info(f"Fetched {len(tickers)} NASDAQ 100 tickers")
-                return tickers
-        # Fallback: try first table with a column that looks like tickers
-        logger.warning("Could not find Ticker/Symbol column, trying fallback")
-        return []
-    except Exception as e:
-        logger.error(f"Failed to fetch NASDAQ 100 list: {e}")
-        return []
-
-
-def get_combined_universe() -> list[str]:
-    """Return deduplicated list of S&P 500 + NASDAQ 100 tickers."""
-    sp500 = get_sp500_tickers()
-    nq100 = get_nasdaq100_tickers()
-    combined = sorted(set(sp500 + nq100))
-    logger.info(f"Combined universe: {len(combined)} unique tickers")
-    return combined
 
 
 # ── Technical helpers ───────────────────────────────────────────────────────
@@ -291,10 +246,7 @@ def run_screener(max_workers: int = 10, params: dict | None = None) -> list[dict
     Raises RuntimeError if the ticker universe cannot be fetched.
     """
     tickers = get_combined_universe()
-    if not tickers:
-        raise RuntimeError(
-            "Could not fetch ticker universe — network may be unavailable"
-        )
+    logger.info(f"Scanning {len(tickers)} unique tickers")
 
     results = []
     total = len(tickers)
