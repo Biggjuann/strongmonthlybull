@@ -6,7 +6,7 @@ when the API is unavailable.
 """
 
 from flask import Flask, render_template, jsonify, request
-from screener import run_screener, save_cache, load_cache
+from screener import run_screener, save_cache, load_cache, debug_ticker
 from sample_data import SAMPLE_RESULTS
 from datetime import datetime
 import threading
@@ -139,6 +139,13 @@ def results():
         "last_updated": scan_state.get("last_updated"),
         "demo": scan_state.get("demo", False),
     })
+
+
+@app.route("/api/debug/<ticker>")
+def debug_single(ticker):
+    """Show full monthly bias history for a ticker. Usage: /api/debug/AAPL"""
+    rows = debug_ticker(ticker.upper())
+    return jsonify({"ticker": ticker.upper(), "months": rows})
 
 
 if __name__ == "__main__":

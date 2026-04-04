@@ -3,7 +3,7 @@ Stock Screener: Weak Bull Detection on Monthly Timeframe
 
 Translates the Pine Script "ES/NQ Intraday CVD Bias Reader" indicator
 to Python, applied on monthly bars. Screens S&P 500 and NASDAQ 100
-stocks to find those that entered weak bull within the last 1-3 months.
+stocks to find those that JUST entered weak bull within the last 1-3 months.
 """
 
 import numpy as np
@@ -37,21 +37,30 @@ def ema(series: pd.Series, span: int) -> pd.Series:
     return series.ewm(span=span, adjust=False).mean()
 
 
+def rma(series: pd.Series, length: int) -> pd.Series:
+    """
+    Wilder's smoothed moving average (RMA) matching Pine Script ta.rma.
+    Equivalent to EMA with alpha = 1/length.
+    """
+    return series.ewm(alpha=1.0 / length, adjust=False).mean()
+
+
 def atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int) -> pd.Series:
-    """Average True Range."""
+    """Average True Range using Wilder's RMA — matches Pine Script ta.atr."""
     prev_close = close.shift(1)
     tr = pd.concat([
         high - low,
         (high - prev_close).abs(),
         (low - prev_close).abs(),
     ], axis=1).max(axis=1)
-    return tr.rolling(window=length, min_periods=1).mean()
+    return rma(tr, length)
 
 
 # ── Core indicator logic ────────────────────────────────────────────────────
 def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     """
     Compute the CVD Bias indicator on OHLCV data.
+    Matches Pine Script logic exactly (with useVWAP=false for monthly).
 
     Parameters
     ----------
@@ -60,7 +69,7 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
 
     Returns
     -------
-    DataFrame with added columns: bias, strong_bull, weak_bull, etc.
+    DataFrame with added bias columns.
     """
     p = {**DEFAULTS, **(params or {})}
     df = df.copy()
@@ -71,48 +80,69 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
         return df
 
     # ── Delta proxy and CVD ─────────────────────────────────────────────
+    # Pine: range_ = math.max(high - low, syminfo.mintick)
     range_ = (df["High"] - df["Low"]).clip(lower=1e-10)
+    # Pine: body_ = close - open
     body = df["Close"] - df["Open"]
+    # Pine: bodyPct = body_ / range_
     body_pct = body / range_
+    # Pine: deltaRaw = volume * bodyPct
     delta_raw = df["Volume"] * body_pct
+    # Pine: deltaSmooth = ta.ema(deltaRaw, deltaSmoothLen)
     delta_smooth = ema(delta_raw, p["delta_smooth_len"])
+    # Pine: cvd = ta.cum(deltaSmooth)
     cvd = delta_smooth.cumsum()
+    # Pine: cvdMA = ta.ema(cvd, cvdMaLen)
     cvd_ma = ema(cvd, p["cvd_ma_len"])
 
     # ── Price structure ─────────────────────────────────────────────────
+    # Pine: priceMA = ta.ema(close, priceMaLen)
     price_ma = ema(df["Close"], p["price_ma_len"])
 
+    # Pine: priceAboveMA = close > priceMA
     price_above_ma = df["Close"] > price_ma
     price_below_ma = df["Close"] < price_ma
 
+    # Pine: cvdUp = cvd > cvdMA and cvd > cvd[1]
     cvd_up = (cvd > cvd_ma) & (cvd > cvd.shift(1))
+    # Pine: cvdDown = cvd < cvdMA and cvd < cvd[1]
     cvd_down = (cvd < cvd_ma) & (cvd < cvd.shift(1))
 
-    # Core conditions (no VWAP on monthly — VWAP is intraday only)
     # Pine: bullCore = priceAboveMA and cvdUp and (not useVWAP or priceAboveVWAP)
-    # With useVWAP=false: (not false or ...) = true, so just priceAboveMA and cvdUp
+    # Monthly: useVWAP=false → (not false or ...) = true → priceAboveMA and cvdUp
     bull_core = price_above_ma & cvd_up
+    # Pine: bearCore = priceBelowMA and cvdDown and (not useVWAP or priceBelowVWAP)
     bear_core = price_below_ma & cvd_down
 
     # Pine: bullWeak = (priceAboveMA and cvd > cvdMA) or (useVWAP and priceAboveVWAP and cvdUp)
-    # With useVWAP=false on monthly, second clause is always false
+    # Monthly: useVWAP=false → second clause = false
     bull_weak = price_above_ma & (cvd > cvd_ma)
+    # Pine: bearWeak = (priceBelowMA and cvd < cvdMA) or (useVWAP and priceBelowVWAP and cvdDown)
     bear_weak = price_below_ma & (cvd < cvd_ma)
 
     # ── Chop filter ─────────────────────────────────────────────────────
+    # Pine: atrValue = ta.atr(atrLen)  — uses Wilder's RMA
     atr_value = atr(df["High"], df["Low"], df["Close"], p["atr_len"])
+    # Pine: trendRange = math.abs(close - priceMA)
     trend_range = (df["Close"] - price_ma).abs()
+    # Pine: trendRangePct = atrValue > 0 ? trendRange / atrValue : 0.0
     trend_range_pct = np.where(atr_value > 0, trend_range / atr_value, 0.0)
+    # Pine: isChop = useChopFilter ? trendRangePct < chopThresholdPct : false
     is_chop = pd.Series(
         p["use_chop_filter"] & (trend_range_pct < p["chop_threshold_pct"]),
         index=df.index,
     )
 
-    # ── Bias states ─────────────────────────────────────────────────────
+    # ── Bias states (exact Pine Script logic) ───────────────────────────
+    # Pine: strongBull = bullCore and not isChop
     strong_bull = bull_core & ~is_chop
+    # Pine: weakBull = not strongBull and bullWeak and not bearCore and not isChop
     weak_bull = ~strong_bull & bull_weak & ~bear_core & ~is_chop
+    # Pine: strongBear = bearCore and not isChop
     strong_bear = bear_core & ~is_chop
+    # Pine: weakBear = not strongBear and bearWeak and not bullCore and not isChop
     weak_bear = ~strong_bear & bear_weak & ~bull_core & ~is_chop
+    # Pine: neutral = not strongBull and not weakBull and not strongBear and not weakBear
     neutral = ~strong_bull & ~weak_bull & ~strong_bear & ~weak_bear
 
     # Store results
@@ -126,6 +156,7 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     df["cvd"] = cvd
     df["cvd_ma"] = cvd_ma
     df["atr"] = atr_value
+    df["trend_range_pct"] = trend_range_pct
 
     # String bias label
     df["bias"] = "NEUTRAL"
@@ -137,17 +168,57 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     return df
 
 
+# ── Debug: full bias history for a single ticker ──────────────────────────
+def debug_ticker(ticker: str, params: dict | None = None) -> list[dict]:
+    """Return the full monthly bias history for a ticker (for debugging)."""
+    try:
+        tk = yf.Ticker(ticker)
+        df = tk.history(period="5y", interval="1mo")
+        if df is None or df.empty:
+            return [{"error": f"No data for {ticker}"}]
+
+        df = df.reset_index()
+        if "Date" in df.columns:
+            df["Date"] = pd.to_datetime(df["Date"])
+        elif "Datetime" in df.columns:
+            df.rename(columns={"Datetime": "Date"}, inplace=True)
+
+        df = compute_bias(df, params)
+
+        rows = []
+        for i in range(len(df)):
+            r = df.iloc[i]
+            rows.append({
+                "date": str(r.get("Date", "")),
+                "open": round(float(r["Open"]), 2),
+                "high": round(float(r["High"]), 2),
+                "low": round(float(r["Low"]), 2),
+                "close": round(float(r["Close"]), 2),
+                "volume": int(r["Volume"]),
+                "bias": str(r.get("bias", "N/A")),
+                "is_chop": bool(r.get("is_chop", False)),
+                "price_ma": round(float(r.get("price_ma", 0)), 2),
+                "cvd": round(float(r.get("cvd", 0)), 2),
+                "cvd_ma": round(float(r.get("cvd_ma", 0)), 2),
+                "atr": round(float(r.get("atr", 0)), 2),
+                "trend_range_pct": round(float(r.get("trend_range_pct", 0)), 4),
+            })
+        return rows
+    except Exception as e:
+        return [{"error": str(e)}]
+
+
 # ── Single-stock scanner ───────────────────────────────────────────────────
 def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
     """
     Download monthly data for *ticker* and return screening result.
 
-    Returns a dict with screening info if the stock is currently in
-    weak bull (entered within last 1-3 months), else None.
+    Returns a dict with screening info if the stock JUST entered
+    weak bull (1-3 months), filtering out stocks that have been
+    bullish (weak or strong) for longer.
     """
     try:
         tk = yf.Ticker(ticker)
-        # Get ~5 years of monthly data for enough EMA history
         df = tk.history(period="5y", interval="1mo")
 
         if df is None or df.empty:
@@ -159,7 +230,7 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
         elif "Datetime" in df.columns:
             df.rename(columns={"Datetime": "Date"}, inplace=True)
 
-        # Drop the current incomplete month (last row if it's the current month)
+        # Drop the current incomplete month
         if len(df) > 1 and "Date" in df.columns:
             last_date = pd.to_datetime(df["Date"].iloc[-1])
             now = pd.Timestamp.now()
@@ -181,26 +252,36 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
         if "bias" not in df.columns or df["bias"].iloc[0] == "INSUFFICIENT_DATA":
             return None
 
-        # Must be currently weak bull
+        # Must be currently weak bull on the last completed month
         if not df["weak_bull"].iloc[-1]:
             return None
 
-        # Count consecutive weak_bull months from the end
-        consecutive = 0
+        # Count consecutive months of ANY bullish state (weak bull OR strong bull)
+        # from the end. This prevents stocks that have been bullish for a long
+        # time (flipping between strong/weak bull) from appearing as new entries.
+        bullish_streak = 0
         for i in range(len(df) - 1, -1, -1):
-            if df["weak_bull"].iloc[i]:
-                consecutive += 1
+            if df["weak_bull"].iloc[i] or df["strong_bull"].iloc[i]:
+                bullish_streak += 1
             else:
                 break
 
-        # Only want stocks that entered within 1-3 months
-        if consecutive < 1 or consecutive > 3:
+        # Only want stocks that JUST turned bullish within 1-3 months
+        if bullish_streak > 3:
             return None
+
+        # Also count consecutive weak_bull specifically
+        weak_bull_streak = 0
+        for i in range(len(df) - 1, -1, -1):
+            if df["weak_bull"].iloc[i]:
+                weak_bull_streak += 1
+            else:
+                break
 
         # Gather info
         last_row = df.iloc[-1]
         prev_row = df.iloc[-2] if len(df) >= 2 else last_row
-        entry_idx = len(df) - consecutive
+        entry_idx = len(df) - bullish_streak
         entry_row = df.iloc[entry_idx] if entry_idx < len(df) else last_row
         prev_bias = df["bias"].iloc[entry_idx - 1] if entry_idx > 0 else "N/A"
 
@@ -225,7 +306,8 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
             "market_cap": market_cap,
             "current_bias": str(last_row["bias"]),
             "previous_bias": prev_bias,
-            "months_in_weak_bull": consecutive,
+            "months_in_weak_bull": weak_bull_streak,
+            "bullish_months_total": bullish_streak,
             "entry_date": str(entry_row.get("Date", "N/A")),
             "current_price": round(float(last_row["Close"]), 2),
             "price_ma": round(float(last_row["price_ma"]), 2),
@@ -250,8 +332,6 @@ def run_screener(max_workers: int = 10, params: dict | None = None) -> list[dict
 
     Returns list of dicts sorted by months_in_weak_bull (ascending),
     then by ticker.
-
-    Raises RuntimeError if the ticker universe cannot be fetched.
     """
     tickers = get_combined_universe()
     logger.info(f"Scanning {len(tickers)} unique tickers")
@@ -324,6 +404,6 @@ if __name__ == "__main__":
     print(f"Found {len(results)} stocks in weak bull (1-3 months)\n")
     for r in results:
         print(f"  {r['ticker']:6s} | {r['name'][:30]:30s} | "
-              f"Months: {r['months_in_weak_bull']} | "
+              f"WB: {r['months_in_weak_bull']}mo | Bull: {r['bullish_months_total']}mo | "
               f"Price: ${r['current_price']:>8.2f} | "
               f"From: {r['previous_bias']}")
