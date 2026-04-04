@@ -173,7 +173,7 @@ def debug_ticker(ticker: str, params: dict | None = None) -> list[dict]:
     """Return the full monthly bias history for a ticker (for debugging)."""
     try:
         tk = yf.Ticker(ticker)
-        df = tk.history(period="5y", interval="1mo")
+        df = tk.history(period="max", interval="1mo")
         if df is None or df.empty:
             return [{"error": f"No data for {ticker}"}]
 
@@ -219,7 +219,7 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
     """
     try:
         tk = yf.Ticker(ticker)
-        df = tk.history(period="5y", interval="1mo")
+        df = tk.history(period="max", interval="1mo")
 
         if df is None or df.empty:
             return None
