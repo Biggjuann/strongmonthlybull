@@ -287,11 +287,14 @@ def run_screener(max_workers: int = 10, params: dict | None = None) -> list[dict
 
     Returns list of dicts sorted by months_in_weak_bull (ascending),
     then by ticker.
+
+    Raises RuntimeError if the ticker universe cannot be fetched.
     """
     tickers = get_combined_universe()
     if not tickers:
-        logger.error("No tickers to scan")
-        return []
+        raise RuntimeError(
+            "Could not fetch ticker universe — network may be unavailable"
+        )
 
     results = []
     total = len(tickers)

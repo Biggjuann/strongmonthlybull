@@ -467,6 +467,22 @@
             );
             renderTable(filtered);
         }
+
+        // Auto-check for results on page load (picks up boot scan or cache)
+        (function autoLoad() {
+            fetch('/api/status').then(r => r.json()).then(data => {
+                if (data.demo) {
+                    document.getElementById('demoBanner').style.display = 'flex';
+                }
+                if (data.running) {
+                    updateStatus('running', 'Scanning in progress...');
+                    pollInterval = setInterval(pollStatus, 3000);
+                } else if (data.count > 0) {
+                    updateStatus('done', `${data.count} stocks found — Last updated: ${formatDate(data.last_updated)}`);
+                    loadResults();
+                }
+            });
+        })();
     </script>
 </body>
 </html>
