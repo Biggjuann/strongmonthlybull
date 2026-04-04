@@ -144,10 +144,10 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
     """
     try:
         tk = yf.Ticker(ticker)
-        # Get ~3 years of monthly data for enough EMA history
-        df = tk.history(period="3y", interval="1mo")
+        # Get ~5 years of monthly data for enough EMA history
+        df = tk.history(period="5y", interval="1mo")
 
-        if df.empty or len(df) < 30:
+        if df is None or df.empty:
             return None
 
         df = df.reset_index()
@@ -156,25 +156,32 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
         elif "Datetime" in df.columns:
             df.rename(columns={"Datetime": "Date"}, inplace=True)
 
+        # Drop the current incomplete month (last row if it's the current month)
+        if len(df) > 1 and "Date" in df.columns:
+            last_date = pd.to_datetime(df["Date"].iloc[-1])
+            now = pd.Timestamp.now()
+            if last_date.year == now.year and last_date.month == now.month:
+                df = df.iloc[:-1]
+
+        # Need enough bars for EMA calculations
+        min_bars = max(
+            params.get("cvd_ma_len", DEFAULTS["cvd_ma_len"]),
+            params.get("price_ma_len", DEFAULTS["price_ma_len"]),
+            params.get("atr_len", DEFAULTS["atr_len"]),
+        ) + 5 if params else DEFAULTS["cvd_ma_len"] + 5
+        if len(df) < min_bars:
+            return None
+
         df = compute_bias(df, params)
 
         if "bias" not in df.columns or df["bias"].iloc[0] == "INSUFFICIENT_DATA":
             return None
 
-        # Check the last 3 months for weak bull entry
-        recent = df.tail(4)  # last 4 bars to check transitions
-        if len(recent) < 2:
+        # Must be currently weak bull
+        if not df["weak_bull"].iloc[-1]:
             return None
 
-        current_bias = df["bias"].iloc[-1]
-        # Find when weak bull started (looking at last 3 bars)
-        last_3 = df.tail(3)
-        weak_bull_months = last_3["weak_bull"].sum()
-
-        if weak_bull_months == 0:
-            return None
-
-        # Determine how long in weak bull: count consecutive weak_bull from end
+        # Count consecutive weak_bull months from the end
         consecutive = 0
         for i in range(len(df) - 1, -1, -1):
             if df["weak_bull"].iloc[i]:
@@ -182,10 +189,7 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
             else:
                 break
 
-        # Must be currently weak bull AND entered within 1-3 months
-        if not df["weak_bull"].iloc[-1]:
-            return None
-
+        # Only want stocks that entered within 1-3 months
         if consecutive < 1 or consecutive > 3:
             return None
 
@@ -215,7 +219,7 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
             "sector": sector,
             "industry": industry,
             "market_cap": market_cap,
-            "current_bias": current_bias,
+            "current_bias": str(last_row["bias"]),
             "previous_bias": prev_bias,
             "months_in_weak_bull": consecutive,
             "entry_date": str(entry_row.get("Date", "N/A")),
@@ -231,7 +235,7 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
         }
 
     except Exception as e:
-        logger.debug(f"Error scanning {ticker}: {e}")
+        logger.warning(f"Error scanning {ticker}: {e}")
         return None
 
 
@@ -249,6 +253,8 @@ def run_screener(max_workers: int = 10, params: dict | None = None) -> list[dict
     logger.info(f"Scanning {len(tickers)} unique tickers")
 
     results = []
+    errors = 0
+    skipped = 0
     total = len(tickers)
     done = 0
 
@@ -261,13 +267,23 @@ def run_screener(max_workers: int = 10, params: dict | None = None) -> list[dict
         for future in concurrent.futures.as_completed(future_map):
             done += 1
             if done % 50 == 0:
-                logger.info(f"Progress: {done}/{total}")
-            result = future.result()
+                logger.info(f"Progress: {done}/{total} | matches: {len(results)}")
+            try:
+                result = future.result()
+            except Exception as e:
+                errors += 1
+                logger.warning(f"Future error: {e}")
+                continue
             if result is not None:
                 results.append(result)
+            else:
+                skipped += 1
 
     results.sort(key=lambda x: (x["months_in_weak_bull"], x["ticker"]))
-    logger.info(f"Scan complete. Found {len(results)} stocks in weak bull (1-3 months)")
+    logger.info(
+        f"Scan complete. {len(results)} weak bull | "
+        f"{skipped} filtered out | {errors} errors | {total} total"
+    )
     return results
 
 
