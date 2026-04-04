@@ -89,12 +89,15 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     cvd_down = (cvd < cvd_ma) & (cvd < cvd.shift(1))
 
     # Core conditions (no VWAP on monthly — VWAP is intraday only)
+    # Pine: bullCore = priceAboveMA and cvdUp and (not useVWAP or priceAboveVWAP)
+    # With useVWAP=false: (not false or ...) = true, so just priceAboveMA and cvdUp
     bull_core = price_above_ma & cvd_up
     bear_core = price_below_ma & cvd_down
 
-    # Weak conditions
-    bull_weak = (price_above_ma & (cvd > cvd_ma)) | cvd_up
-    bear_weak = (price_below_ma & (cvd < cvd_ma)) | cvd_down
+    # Pine: bullWeak = (priceAboveMA and cvd > cvdMA) or (useVWAP and priceAboveVWAP and cvdUp)
+    # With useVWAP=false on monthly, second clause is always false
+    bull_weak = price_above_ma & (cvd > cvd_ma)
+    bear_weak = price_below_ma & (cvd < cvd_ma)
 
     # ── Chop filter ─────────────────────────────────────────────────────
     atr_value = atr(df["High"], df["Low"], df["Close"], p["atr_len"])
@@ -164,11 +167,12 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
                 df = df.iloc[:-1]
 
         # Need enough bars for EMA calculations
+        p = params or DEFAULTS
         min_bars = max(
-            params.get("cvd_ma_len", DEFAULTS["cvd_ma_len"]),
-            params.get("price_ma_len", DEFAULTS["price_ma_len"]),
-            params.get("atr_len", DEFAULTS["atr_len"]),
-        ) + 5 if params else DEFAULTS["cvd_ma_len"] + 5
+            p.get("cvd_ma_len", DEFAULTS["cvd_ma_len"]),
+            p.get("price_ma_len", DEFAULTS["price_ma_len"]),
+            p.get("atr_len", DEFAULTS["atr_len"]),
+        ) + 5
         if len(df) < min_bars:
             return None
 
