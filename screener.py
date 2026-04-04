@@ -230,12 +230,8 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
         elif "Datetime" in df.columns:
             df.rename(columns={"Datetime": "Date"}, inplace=True)
 
-        # Drop the current incomplete month
-        if len(df) > 1 and "Date" in df.columns:
-            last_date = pd.to_datetime(df["Date"].iloc[-1])
-            now = pd.Timestamp.now()
-            if last_date.year == now.year and last_date.month == now.month:
-                df = df.iloc[:-1]
+        # Keep the current month's bar (even though incomplete) to match
+        # TradingView real-time behavior. TV evaluates the current bar live.
 
         # Need enough bars for EMA calculations
         p = params or DEFAULTS
