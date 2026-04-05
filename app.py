@@ -59,7 +59,7 @@ def background_scan(force: bool = False):
                     scan_state["running"] = False
                 return
 
-        results = run_screener(max_workers=2)
+        results = run_screener(max_workers=8)
         save_cache(results)
         with scan_lock:
             scan_state["results"] = results

@@ -32,7 +32,7 @@ DEFAULTS = {
 
 
 # ── Technical helpers ───────────────────────────────────────────────────────
-def fetch_monthly(ticker: str, period: str = "5y", timeout: int = 10) -> pd.DataFrame | None:
+def fetch_monthly(ticker: str, period: str = "3y", timeout: int = 10) -> pd.DataFrame | None:
     """
     Fetch monthly OHLCV data using unadjusted prices (split-adjusted only).
 
