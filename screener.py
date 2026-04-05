@@ -178,9 +178,9 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     return df
 
 
-# ── Debug: full bias history for a single ticker ──────────────────────────
+# ── Debug: bias history for a single ticker (last 12 months) ──────────────
 def debug_ticker(ticker: str, params: dict | None = None) -> list[dict]:
-    """Return the full monthly bias history for a ticker (for debugging)."""
+    """Return the last 12 months of bias history for a ticker."""
     try:
         tk = yf.Ticker(ticker)
         df = tk.history(period="max", interval="1mo")
@@ -195,6 +195,9 @@ def debug_ticker(ticker: str, params: dict | None = None) -> list[dict]:
 
         df = compute_bias(df, params)
 
+        # Only return last 12 months to keep response fast
+        df = df.tail(12)
+
         rows = []
         for i in range(len(df)):
             r = df.iloc[i]
@@ -207,11 +210,12 @@ def debug_ticker(ticker: str, params: dict | None = None) -> list[dict]:
                 "volume": int(r["Volume"]),
                 "bias": str(r.get("bias", "N/A")),
                 "is_chop": bool(r.get("is_chop", False)),
+                "price_vs_ma": "ABOVE" if r["Close"] > r.get("price_ma", 0) else "BELOW",
                 "price_ma": round(float(r.get("price_ma", 0)), 2),
                 "vwap": round(float(r.get("vwap", 0)), 2),
                 "price_vs_vwap": "ABOVE" if r["Close"] > r.get("vwap", 0) else "BELOW",
-                "cvd": round(float(r.get("cvd", 0)), 2),
-                "cvd_ma": round(float(r.get("cvd_ma", 0)), 2),
+                "cvd_vs_ma": "ABOVE" if r.get("cvd", 0) > r.get("cvd_ma", 0) else "BELOW",
+                "cvd_rising": bool(r.get("cvd", 0) > df.iloc[i - 1].get("cvd", 0)) if i > 0 else False,
                 "atr": round(float(r.get("atr", 0)), 2),
                 "trend_range_pct": round(float(r.get("trend_range_pct", 0)), 4),
             })
