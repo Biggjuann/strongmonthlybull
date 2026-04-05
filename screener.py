@@ -32,6 +32,33 @@ DEFAULTS = {
 
 
 # ── Technical helpers ───────────────────────────────────────────────────────
+def fetch_monthly(ticker: str, period: str = "10y", timeout: int = 15) -> pd.DataFrame | None:
+    """
+    Fetch monthly OHLCV data using unadjusted prices (split-adjusted only).
+
+    TradingView defaults to split-adjusted, NOT dividend-adjusted prices.
+    yfinance's auto_adjust=True returns dividend-adjusted prices, which
+    pulls historical prices down and distorts EMA/ATR calculations.
+    """
+    tk = yf.Ticker(ticker)
+    try:
+        df = tk.history(period=period, interval="1mo", auto_adjust=False, timeout=timeout)
+    except TypeError:
+        # Older yfinance versions may not support timeout parameter
+        df = tk.history(period=period, interval="1mo", auto_adjust=False)
+    if df is None or df.empty:
+        return None
+    # With auto_adjust=False, "Close" is the unadjusted close.
+    # Drop "Adj Close" column if present — we don't need it.
+    if "Adj Close" in df.columns:
+        df = df.drop(columns=["Adj Close"])
+    # Drop Dividends/Stock Splits columns if present
+    for col in ["Dividends", "Stock Splits", "Capital Gains"]:
+        if col in df.columns:
+            df = df.drop(columns=[col])
+    return df
+
+
 def ema(series: pd.Series, span: int) -> pd.Series:
     """Exponential moving average matching Pine Script ta.ema."""
     return series.ewm(span=span, adjust=False).mean()
@@ -185,9 +212,8 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
 def debug_ticker(ticker: str, params: dict | None = None) -> dict:
     """Return the last 12 months of bias history with VWAP variants."""
     try:
-        tk = yf.Ticker(ticker)
-        df = tk.history(period="10y", interval="1mo", timeout=15)
-        if df is None or df.empty:
+        df = fetch_monthly(ticker)
+        if df is None:
             return {"error": f"No data for {ticker}"}
 
         df = df.reset_index()
@@ -260,10 +286,8 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
     bullish (weak or strong) for longer.
     """
     try:
-        tk = yf.Ticker(ticker)
-        df = tk.history(period="10y", interval="1mo", timeout=15)
-
-        if df is None or df.empty:
+        df = fetch_monthly(ticker)
+        if df is None:
             return None
 
         df = df.reset_index()
@@ -271,9 +295,6 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
             df["Date"] = pd.to_datetime(df["Date"])
         elif "Datetime" in df.columns:
             df.rename(columns={"Datetime": "Date"}, inplace=True)
-
-        # Keep the current month's bar (even though incomplete) to match
-        # TradingView real-time behavior. TV evaluates the current bar live.
 
         # Need enough bars for EMA calculations
         p = params or DEFAULTS
@@ -325,6 +346,7 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
 
         # Get company name
         try:
+            tk = yf.Ticker(ticker)
             info = tk.info
             name = info.get("shortName", info.get("longName", ticker))
             sector = info.get("sector", "N/A")
