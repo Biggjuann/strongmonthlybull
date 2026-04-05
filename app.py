@@ -149,21 +149,12 @@ def debug_single(ticker):
     return jsonify(result)
 
 
-# Boot: load cache or auto-scan (works under both gunicorn and direct run)
-def boot():
-    cached = load_cache(max_age_hours=6)
-    if cached is not None:
-        scan_state["results"] = cached
-        scan_state["last_updated"] = datetime.now().isoformat()
-        logger.info(f"Loaded {len(cached)} cached results on boot")
-    else:
-        # Auto-scan on first boot (no cache available)
-        t = threading.Thread(target=background_scan, args=(True,), daemon=True)
-        t.start()
-        logger.info("No cache found — starting auto-scan")
-
-
-boot()
+# Boot: load cache if available (works under both gunicorn and direct run)
+cached = load_cache(max_age_hours=6)
+if cached is not None:
+    scan_state["results"] = cached
+    scan_state["last_updated"] = datetime.now().isoformat()
+    logger.info(f"Loaded {len(cached)} cached results on boot")
 
 
 if __name__ == "__main__":
