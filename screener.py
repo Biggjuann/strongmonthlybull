@@ -147,20 +147,22 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     price_above_vwap = df["Close"] > vwap_value
     price_below_vwap = df["Close"] < vwap_value
 
-    # CVD trend — cvd_up means CVD is above its MA (user-confirmed logic)
-    cvd_up = cvd > cvd_ma
-    cvd_down = cvd < cvd_ma
+    # Pine: cvdUp = cvd > cvdMA and cvd > cvd[1]  (above MA AND rising)
+    # Used in bullCore and the VWAP clause of bullWeak
+    cvd_up = (cvd > cvd_ma) & (cvd > cvd.shift(1))
+    cvd_down = (cvd < cvd_ma) & (cvd < cvd.shift(1))
 
-    # Core bullish: price above MA + CVD above its MA + above VWAP + not chop
+    # Pine: bullCore = priceAboveMA and cvdUp and (not useVWAP or priceAboveVWAP)
     bull_core = price_above_ma & cvd_up & price_above_vwap
-    # Core bearish: price below MA + CVD below its MA + below VWAP + not chop
+    # Pine: bearCore = priceBelowMA and cvdDown and (not useVWAP or priceBelowVWAP)
     bear_core = price_below_ma & cvd_down & price_below_vwap
 
-    # Weak bullish: somewhat bullish alignment but not full core
-    # (price above MA and CVD above MA) OR (above VWAP and CVD above MA)
-    bull_weak = (price_above_ma & cvd_up) | (price_above_vwap & cvd_up)
-    # Weak bearish
-    bear_weak = (price_below_ma & cvd_down) | (price_below_vwap & cvd_down)
+    # Pine: bullWeak = (priceAboveMA and cvd > cvdMA) or (useVWAP and priceAboveVWAP and cvdUp)
+    # First clause: price above MA + CVD above MA (no rising required)
+    # Second clause: above VWAP + CVD above MA AND rising (stricter)
+    bull_weak = (price_above_ma & (cvd > cvd_ma)) | (price_above_vwap & cvd_up)
+    # Pine: bearWeak = (priceBelowMA and cvd < cvdMA) or (useVWAP and priceBelowVWAP and cvdDown)
+    bear_weak = (price_below_ma & (cvd < cvd_ma)) | (price_below_vwap & cvd_down)
 
     # ── Chop filter ─────────────────────────────────────────────────────
     atr_value = atr(df["High"], df["Low"], df["Close"], p["atr_len"])
