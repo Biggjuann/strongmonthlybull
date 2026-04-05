@@ -59,7 +59,7 @@ def background_scan(force: bool = False):
                     scan_state["running"] = False
                 return
 
-        results = run_screener(max_workers=4)
+        results = run_screener(max_workers=2)
         save_cache(results)
         with scan_lock:
             scan_state["results"] = results
@@ -149,11 +149,22 @@ def debug_single(ticker):
     return jsonify(result)
 
 
-if __name__ == "__main__":
-    # Load cache on boot if available, but do NOT auto-scan
+# Boot: load cache or auto-scan (works under both gunicorn and direct run)
+def boot():
     cached = load_cache(max_age_hours=6)
     if cached is not None:
         scan_state["results"] = cached
         scan_state["last_updated"] = datetime.now().isoformat()
         logger.info(f"Loaded {len(cached)} cached results on boot")
+    else:
+        # Auto-scan on first boot (no cache available)
+        t = threading.Thread(target=background_scan, args=(True,), daemon=True)
+        t.start()
+        logger.info("No cache found — starting auto-scan")
+
+
+boot()
+
+
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
