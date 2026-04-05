@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Weak Bull Screener — Monthly Timeframe</title>
+    <title>Bullish Entry Screener — Monthly Timeframe</title>
     <style>
         :root {
             --bg: #0d1117;
@@ -207,9 +207,9 @@
     <div class="container">
         <div class="header">
             <div>
-                <h1>CVD Bias <span>Weak Bull</span> Screener</h1>
+                <h1>CVD Bias <span>Bullish Entry</span> Screener</h1>
                 <div class="header-sub">
-                    Monthly Timeframe — S&P 500 + NASDAQ 100 — Stocks entering Weak Bull (1-3 months)
+                    Monthly Timeframe — S&P 500 + NASDAQ 100 — Stocks entering Bullish (1-3 months)
                 </div>
             </div>
             <div style="display:flex;gap:8px;">
@@ -230,7 +230,7 @@
         <div class="summary-cards" id="summaryCards" style="display:none;">
             <div class="card">
                 <div class="card-value green" id="totalCount">0</div>
-                <div class="card-label">Total Weak Bull</div>
+                <div class="card-label">Total Bullish</div>
             </div>
             <div class="card">
                 <div class="card-value green" id="month1Count">0</div>
@@ -258,7 +258,7 @@
                 </select>
             </div>
             <div>
-                <label>Months in Weak Bull:</label>
+                <label>Months Bullish:</label>
                 <select id="filterMonths" onchange="loadResults()">
                     <option value="">All</option>
                     <option value="1">1 month (just entered)</option>
@@ -279,7 +279,7 @@
                         <th onclick="sortTable('ticker')">Ticker <span class="sort-arrow" id="sort-ticker"></span></th>
                         <th onclick="sortTable('name')">Name <span class="sort-arrow" id="sort-name"></span></th>
                         <th onclick="sortTable('sector')">Sector <span class="sort-arrow" id="sort-sector"></span></th>
-                        <th onclick="sortTable('months_in_weak_bull')">Months <span class="sort-arrow" id="sort-months_in_weak_bull"></span></th>
+                        <th onclick="sortTable('months_bullish')">Months <span class="sort-arrow" id="sort-months_bullish"></span></th>
                         <th onclick="sortTable('previous_bias')">Previous Bias <span class="sort-arrow" id="sort-previous_bias"></span></th>
                         <th onclick="sortTable('current_price')">Price <span class="sort-arrow" id="sort-current_price"></span></th>
                         <th onclick="sortTable('price_change_pct')">Chg % <span class="sort-arrow" id="sort-price_change_pct"></span></th>
@@ -294,13 +294,13 @@
 
         <div class="empty-state" id="emptyState">
             <h3>No results yet</h3>
-            <p>Click "Scan" to screen S&P 500 + NASDAQ 100 for stocks entering Weak Bull on the monthly timeframe.</p>
+            <p>Click "Scan" to screen S&P 500 + NASDAQ 100 for stocks entering Bullish on the monthly timeframe.</p>
         </div>
     </div>
 
     <script>
         let allResults = [];
-        let currentSort = { key: 'months_in_weak_bull', dir: 'asc' };
+        let currentSort = { key: 'months_bullish', dir: 'asc' };
         let pollInterval = null;
 
         function startScan(force) {
@@ -382,9 +382,9 @@
         function updateSummary(data) {
             const results = data.results;
             document.getElementById('totalCount').textContent = results.length;
-            document.getElementById('month1Count').textContent = results.filter(r => r.months_in_weak_bull === 1).length;
-            document.getElementById('month2Count').textContent = results.filter(r => r.months_in_weak_bull === 2).length;
-            document.getElementById('month3Count').textContent = results.filter(r => r.months_in_weak_bull === 3).length;
+            document.getElementById('month1Count').textContent = results.filter(r => r.months_bullish === 1).length;
+            document.getElementById('month2Count').textContent = results.filter(r => r.months_bullish === 2).length;
+            document.getElementById('month3Count').textContent = results.filter(r => r.months_bullish === 3).length;
 
             // Top sector
             const sectorCounts = {};
@@ -415,7 +415,7 @@
                     <td><strong>${r.ticker}</strong></td>
                     <td>${(r.name || '').substring(0, 35)}</td>
                     <td>${r.sector || 'N/A'}</td>
-                    <td><span class="months-badge months-${r.months_in_weak_bull}">${r.months_in_weak_bull} mo</span></td>
+                    <td><span class="months-badge months-${r.months_bullish}">${r.months_bullish} mo</span></td>
                     <td>${biasBadge(r.previous_bias)}</td>
                     <td>$${r.current_price.toLocaleString()}</td>
                     <td class="${r.price_change_pct >= 0 ? 'positive' : 'negative'}">${r.price_change_pct > 0 ? '+' : ''}${r.price_change_pct}%</td>

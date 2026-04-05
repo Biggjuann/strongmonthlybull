@@ -110,7 +110,7 @@ def results():
     # Filtering
     sector = request.args.get("sector", "")
     months = request.args.get("months", "")
-    sort_by = request.args.get("sort", "months_in_weak_bull")
+    sort_by = request.args.get("sort", "months_bullish")
     sort_dir = request.args.get("dir", "asc")
 
     filtered = data
@@ -119,7 +119,7 @@ def results():
     if months:
         try:
             m = int(months)
-            filtered = [r for r in filtered if r.get("months_in_weak_bull") == m]
+            filtered = [r for r in filtered if r.get("months_bullish") == m]
         except ValueError:
             pass
 

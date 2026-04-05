@@ -311,13 +311,12 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
         if "bias" not in df.columns or df["bias"].iloc[0] == "INSUFFICIENT_DATA":
             return None
 
-        # Must be currently weak bull on the last completed month
-        if not df["weak_bull"].iloc[-1]:
+        # Must be currently bullish (weak bull OR strong bull)
+        last_is_bullish = df["weak_bull"].iloc[-1] or df["strong_bull"].iloc[-1]
+        if not last_is_bullish:
             return None
 
         # Count consecutive months of ANY bullish state (weak bull OR strong bull)
-        # from the end. This prevents stocks that have been bullish for a long
-        # time (flipping between strong/weak bull) from appearing as new entries.
         bullish_streak = 0
         for i in range(len(df) - 1, -1, -1):
             if df["weak_bull"].iloc[i] or df["strong_bull"].iloc[i]:
@@ -328,14 +327,6 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
         # Only want stocks that JUST turned bullish within 1-3 months
         if bullish_streak > 3:
             return None
-
-        # Also count consecutive weak_bull specifically
-        weak_bull_streak = 0
-        for i in range(len(df) - 1, -1, -1):
-            if df["weak_bull"].iloc[i]:
-                weak_bull_streak += 1
-            else:
-                break
 
         # Gather info
         last_row = df.iloc[-1]
@@ -366,8 +357,7 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
             "market_cap": market_cap,
             "current_bias": str(last_row["bias"]),
             "previous_bias": prev_bias,
-            "months_in_weak_bull": weak_bull_streak,
-            "bullish_months_total": bullish_streak,
+            "months_bullish": bullish_streak,
             "entry_date": str(entry_row.get("Date", "N/A")),
             "current_price": round(float(last_row["Close"]), 2),
             "price_ma": round(float(last_row["price_ma"]), 2),
@@ -425,7 +415,7 @@ def run_screener(max_workers: int = 10, params: dict | None = None) -> list[dict
             else:
                 skipped += 1
 
-    results.sort(key=lambda x: (x["months_in_weak_bull"], x["ticker"]))
+    results.sort(key=lambda x: (x["months_bullish"], x["ticker"]))
     logger.info(
         f"Scan complete. {len(results)} weak bull | "
         f"{skipped} filtered out | {errors} errors | {total} total"
@@ -466,6 +456,6 @@ if __name__ == "__main__":
     print(f"Found {len(results)} stocks in weak bull (1-3 months)\n")
     for r in results:
         print(f"  {r['ticker']:6s} | {r['name'][:30]:30s} | "
-              f"WB: {r['months_in_weak_bull']}mo | Bull: {r['bullish_months_total']}mo | "
+              f"Bull: {r['months_bullish']}mo | Bias: {r['current_bias']} | "
               f"Price: ${r['current_price']:>8.2f} | "
               f"From: {r['previous_bias']}")
