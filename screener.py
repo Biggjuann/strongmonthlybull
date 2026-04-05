@@ -100,58 +100,60 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     price_ma = ema(df["Close"], p["price_ma_len"])
 
     # Pine: vwapValue = ta.vwap(close)
-    # ta.vwap(source) = cumsum(source * volume) / cumsum(volume)
-    cum_vol = df["Volume"].cumsum()
-    cum_pv = (df["Close"] * df["Volume"]).cumsum()
+    # On monthly charts, TradingView anchors VWAP to the calendar year.
+    # cumsum(source * volume) / cumsum(volume), resetting each January.
+    pv = df["Close"] * df["Volume"]
+    if "Date" in df.columns:
+        year_groups = pd.to_datetime(df["Date"]).dt.year
+    else:
+        # Fallback: no year anchoring
+        year_groups = pd.Series(0, index=df.index)
+    cum_pv = pv.groupby(year_groups).cumsum()
+    cum_vol = df["Volume"].groupby(year_groups).cumsum()
     vwap_value = cum_pv / cum_vol.clip(lower=1)
 
     # Pine: priceAboveMA = close > priceMA
     price_above_ma = df["Close"] > price_ma
     price_below_ma = df["Close"] < price_ma
 
-    # Pine: priceAboveVWAP = close > vwapValue
+    # Price vs VWAP
     price_above_vwap = df["Close"] > vwap_value
     price_below_vwap = df["Close"] < vwap_value
 
-    # Pine: cvdUp = cvd > cvdMA and cvd > cvd[1]
-    cvd_up = (cvd > cvd_ma) & (cvd > cvd.shift(1))
-    # Pine: cvdDown = cvd < cvdMA and cvd < cvd[1]
-    cvd_down = (cvd < cvd_ma) & (cvd < cvd.shift(1))
+    # CVD trend — cvd_up means CVD is above its MA (user-confirmed logic)
+    cvd_up = cvd > cvd_ma
+    cvd_down = cvd < cvd_ma
 
-    # Pine: bullCore = priceAboveMA and cvdUp and (not useVWAP or priceAboveVWAP)
-    # useVWAP=true → requires priceAboveVWAP
+    # Core bullish: price above MA + CVD above its MA + above VWAP + not chop
     bull_core = price_above_ma & cvd_up & price_above_vwap
-    # Pine: bearCore = priceBelowMA and cvdDown and (not useVWAP or priceBelowVWAP)
+    # Core bearish: price below MA + CVD below its MA + below VWAP + not chop
     bear_core = price_below_ma & cvd_down & price_below_vwap
 
-    # Pine: bullWeak = (priceAboveMA and cvd > cvdMA) or (useVWAP and priceAboveVWAP and cvdUp)
-    bull_weak = (price_above_ma & (cvd > cvd_ma)) | (price_above_vwap & cvd_up)
-    # Pine: bearWeak = (priceBelowMA and cvd < cvdMA) or (useVWAP and priceBelowVWAP and cvdDown)
-    bear_weak = (price_below_ma & (cvd < cvd_ma)) | (price_below_vwap & cvd_down)
+    # Weak bullish: somewhat bullish alignment but not full core
+    # (price above MA and CVD above MA) OR (above VWAP and CVD above MA)
+    bull_weak = (price_above_ma & cvd_up) | (price_above_vwap & cvd_up)
+    # Weak bearish
+    bear_weak = (price_below_ma & cvd_down) | (price_below_vwap & cvd_down)
 
     # ── Chop filter ─────────────────────────────────────────────────────
-    # Pine: atrValue = ta.atr(atrLen)  — uses Wilder's RMA
     atr_value = atr(df["High"], df["Low"], df["Close"], p["atr_len"])
-    # Pine: trendRange = math.abs(close - priceMA)
     trend_range = (df["Close"] - price_ma).abs()
-    # Pine: trendRangePct = atrValue > 0 ? trendRange / atrValue : 0.0
     trend_range_pct = np.where(atr_value > 0, trend_range / atr_value, 0.0)
-    # Pine: isChop = useChopFilter ? trendRangePct < chopThresholdPct : false
     is_chop = pd.Series(
         p["use_chop_filter"] & (trend_range_pct < p["chop_threshold_pct"]),
         index=df.index,
     )
 
-    # ── Bias states (exact Pine Script logic) ───────────────────────────
-    # Pine: strongBull = bullCore and not isChop
+    # ── Bias states (matching user-confirmed green background logic) ────
+    # Strong bull: core bullish + not chop
     strong_bull = bull_core & ~is_chop
-    # Pine: weakBull = not strongBull and bullWeak and not bearCore and not isChop
-    weak_bull = ~strong_bull & bull_weak & ~bear_core & ~is_chop
-    # Pine: strongBear = bearCore and not isChop
+    # Weak bull: not strong bull + weak bullish conditions + not chop
+    weak_bull = ~strong_bull & bull_weak & ~is_chop
+    # Strong bear: core bearish + not chop
     strong_bear = bear_core & ~is_chop
-    # Pine: weakBear = not strongBear and bearWeak and not bullCore and not isChop
-    weak_bear = ~strong_bear & bear_weak & ~bull_core & ~is_chop
-    # Pine: neutral = not strongBull and not weakBull and not strongBear and not weakBear
+    # Weak bear: not strong bear + weak bearish conditions + not chop
+    weak_bear = ~strong_bear & bear_weak & ~is_chop
+    # Neutral: none of the above
     neutral = ~strong_bull & ~weak_bull & ~strong_bear & ~weak_bear
 
     # Store results
@@ -165,6 +167,7 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     df["vwap"] = vwap_value
     df["cvd"] = cvd
     df["cvd_ma"] = cvd_ma
+    df["delta_smooth"] = delta_smooth
     df["atr"] = atr_value
     df["trend_range_pct"] = trend_range_pct
 
@@ -179,13 +182,13 @@ def compute_bias(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
 
 
 # ── Debug: bias history for a single ticker (last 12 months) ──────────────
-def debug_ticker(ticker: str, params: dict | None = None) -> list[dict]:
-    """Return the last 12 months of bias history for a ticker."""
+def debug_ticker(ticker: str, params: dict | None = None) -> dict:
+    """Return the last 12 months of bias history with VWAP variants."""
     try:
         tk = yf.Ticker(ticker)
-        df = tk.history(period="max", interval="1mo")
+        df = tk.history(period="10y", interval="1mo", timeout=15)
         if df is None or df.empty:
-            return [{"error": f"No data for {ticker}"}]
+            return {"error": f"No data for {ticker}"}
 
         df = df.reset_index()
         if "Date" in df.columns:
@@ -193,14 +196,32 @@ def debug_ticker(ticker: str, params: dict | None = None) -> list[dict]:
         elif "Datetime" in df.columns:
             df.rename(columns={"Datetime": "Date"}, inplace=True)
 
+        total_bars = len(df)
         df = compute_bias(df, params)
 
-        # Only return last 12 months to keep response fast
-        df = df.tail(12)
+        # Compute VWAP variants for comparison
+        pv = df["Close"] * df["Volume"]
+        # Variant 1: yearly anchor (used by compute_bias)
+        # already in df["vwap"]
+        # Variant 2: quarterly anchor
+        if "Date" in df.columns:
+            quarter_groups = pd.to_datetime(df["Date"]).dt.to_period("Q")
+            cum_pv_q = pv.groupby(quarter_groups).cumsum()
+            cum_vol_q = df["Volume"].groupby(quarter_groups).cumsum()
+            vwap_quarterly = cum_pv_q / cum_vol_q.clip(lower=1)
+        else:
+            vwap_quarterly = df["vwap"]
+        # Variant 3: all-time cumulative
+        vwap_alltime = pv.cumsum() / df["Volume"].cumsum().clip(lower=1)
+
+        # Only return last 12 months
+        tail = df.tail(12).copy()
+        tail["vwap_quarterly"] = vwap_quarterly.tail(12).values
+        tail["vwap_alltime"] = vwap_alltime.tail(12).values
 
         rows = []
-        for i in range(len(df)):
-            r = df.iloc[i]
+        for i in range(len(tail)):
+            r = tail.iloc[i]
             rows.append({
                 "date": str(r.get("Date", "")),
                 "open": round(float(r["Open"]), 2),
@@ -210,18 +231,23 @@ def debug_ticker(ticker: str, params: dict | None = None) -> list[dict]:
                 "volume": int(r["Volume"]),
                 "bias": str(r.get("bias", "N/A")),
                 "is_chop": bool(r.get("is_chop", False)),
-                "price_vs_ma": "ABOVE" if r["Close"] > r.get("price_ma", 0) else "BELOW",
                 "price_ma": round(float(r.get("price_ma", 0)), 2),
-                "vwap": round(float(r.get("vwap", 0)), 2),
+                "price_vs_ma": "ABOVE" if r["Close"] > r.get("price_ma", 0) else "BELOW",
+                "vwap_yearly": round(float(r.get("vwap", 0)), 2),
+                "vwap_quarterly": round(float(r.get("vwap_quarterly", 0)), 2),
+                "vwap_alltime": round(float(r.get("vwap_alltime", 0)), 2),
                 "price_vs_vwap": "ABOVE" if r["Close"] > r.get("vwap", 0) else "BELOW",
+                "cvd": round(float(r.get("cvd", 0)), 2),
+                "cvd_ma": round(float(r.get("cvd_ma", 0)), 2),
                 "cvd_vs_ma": "ABOVE" if r.get("cvd", 0) > r.get("cvd_ma", 0) else "BELOW",
-                "cvd_rising": bool(r.get("cvd", 0) > df.iloc[i - 1].get("cvd", 0)) if i > 0 else False,
+                "cvd_rising": bool(float(r.get("cvd", 0)) > float(tail.iloc[i - 1].get("cvd", 0))) if i > 0 else False,
+                "delta_smooth": round(float(r.get("delta_smooth", 0)), 2),
                 "atr": round(float(r.get("atr", 0)), 2),
                 "trend_range_pct": round(float(r.get("trend_range_pct", 0)), 4),
             })
-        return rows
+        return {"total_bars": total_bars, "vwap_mode": "yearly", "months": rows}
     except Exception as e:
-        return [{"error": str(e)}]
+        return {"error": str(e)}
 
 
 # ── Single-stock scanner ───────────────────────────────────────────────────
@@ -235,7 +261,7 @@ def scan_ticker(ticker: str, params: dict | None = None) -> dict | None:
     """
     try:
         tk = yf.Ticker(ticker)
-        df = tk.history(period="max", interval="1mo")
+        df = tk.history(period="10y", interval="1mo", timeout=15)
 
         if df is None or df.empty:
             return None

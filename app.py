@@ -59,7 +59,7 @@ def background_scan(force: bool = False):
                     scan_state["running"] = False
                 return
 
-        results = run_screener(max_workers=10)
+        results = run_screener(max_workers=4)
         save_cache(results)
         with scan_lock:
             scan_state["results"] = results
@@ -144,12 +144,16 @@ def results():
 @app.route("/api/debug/<ticker>")
 def debug_single(ticker):
     """Show full monthly bias history for a ticker. Usage: /api/debug/AAPL"""
-    rows = debug_ticker(ticker.upper())
-    return jsonify({"ticker": ticker.upper(), "months": rows})
+    result = debug_ticker(ticker.upper())
+    result["ticker"] = ticker.upper()
+    return jsonify(result)
 
 
 if __name__ == "__main__":
-    # Auto-start a scan on boot
-    t = threading.Thread(target=background_scan, daemon=True)
-    t.start()
+    # Load cache on boot if available, but do NOT auto-scan
+    cached = load_cache(max_age_hours=6)
+    if cached is not None:
+        scan_state["results"] = cached
+        scan_state["last_updated"] = datetime.now().isoformat()
+        logger.info(f"Loaded {len(cached)} cached results on boot")
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
